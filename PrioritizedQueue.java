@@ -18,7 +18,6 @@ class Test
 		TaskFactory() {}
 		
 		public abstract Runnable newTask(String key);
-		public abstract Runnable newBulkTask(Collection<String> keys);
 	}
 	
 	public class ExampleTaskFactory extends TaskFactory
@@ -28,11 +27,6 @@ class Test
 		public Runnable newTask(String key)
 		{
 			return new ExampleTask(key);
-		}
-
-		public Runnable newBulkTask(Collection<String> keys)
-		{
-			return new ExampleBulkTask(keys);
 		}
 	}
 	
@@ -53,26 +47,6 @@ class Test
 			catch(Exception e) {};
 
 			System.out.println("task for " + key + " finished on thread " + Thread.currentThread().getId() + ".");
-		}
-	}
-	
-	public class ExampleBulkTask implements Runnable
-	{
-		private Collection<String> keys;
-		
-		ExampleBulkTask(Collection<String> keys)
-		{
-			this.keys = keys;
-		}
-		
-		public void run()
-		{
-			try {
-				Thread.sleep(1000);
-			}
-			catch(Exception e) {};
-			
-			System.out.println("bulk task for " + keys + " finished on thread " + Thread.currentThread().getId() + ".");
 		}
 	}
 	
@@ -125,44 +99,6 @@ class Test
 			entry.enqueue(queues.get(queueIndex));
 		}
 
-		synchronized public Collection<String> runBulkTask(Collection<String> keys, TaskFactory taskFactory)
-		{
-			Iterator<String> iterator = keys.iterator();
-
-			ArrayList<String> eligibleKeys = new ArrayList<String>();
-			
-			while (iterator.hasNext()) {
-				String key = iterator.next();
-				TaskMapEntry entry = taskMap.get(key);
-
-				if (entry == null) {
-					entry = new TaskMapEntry(key, this);
-					taskMap.put(key, entry);
-					eligibleKeys.add(key);
-				}
-				else
-					if (entry.dequeue()) {
-						entry.priority = 0;
-						eligibleKeys.add(key);
-					}
-			}
-
-			try {
-				taskFactory.newBulkTask(eligibleKeys).run();
-			}
-			catch (Exception e) {
-				// handle the exception
-			}
-			finally {
-				iterator = eligibleKeys.iterator();
-
-				while (iterator.hasNext())
-					taskMap.get(iterator.next()).requeue();
-			}
-			
-			return eligibleKeys;
-		}
-		
 		private class TaskMapEntry implements Runnable
 		{
 			public String key;
@@ -272,16 +208,6 @@ class Test
 			queueManager.submitTask("uri1");
 		
 		System.out.println("submitted");
-
-		ArrayList<String> keys = new ArrayList<String>();
-		keys.add("uri1");
-		keys.add("uri5");
-		keys.add("uri7");
-		keys.add("uri8");
-		queueManager.runBulkTask(keys, taskFactory);
-
-		keys.add("uri6");
-		queueManager.runBulkTask(keys, taskFactory);
 }
 
 	public static void main(String[] argv)
