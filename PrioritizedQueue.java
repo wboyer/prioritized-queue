@@ -15,53 +15,6 @@ import java.util.concurrent.*;
  */
 class Test
 {
-	public class TaskDetails
-	{
-		public String key;
-		public int priority;
-		public ArrayList<String> instructions;
-		
-		TaskDetails(String key)
-		{
-			this.key = key;
-		}
-
-		synchronized public void add(int priority, String instructions)
-		{
-			this.priority += priority;
-
-			if (instructions != null) {
-				if (this.instructions == null)
-					this.instructions = new ArrayList<String>();
-				this.instructions.add(instructions);
-			}
-		}
-
-		synchronized public void add(TaskDetails details)
-		{
-			this.priority += details.priority;
-
-			if (details.instructions != null) {
-				if (this.instructions == null)
-					this.instructions = new ArrayList<String>();
-				this.instructions.addAll(details.instructions);
-			}
-		}
-
-		synchronized public TaskDetails clear()
-		{
-			TaskDetails details = new TaskDetails(key);
-
-			details.priority = this.priority;
-			this.priority = 0;
-
-			details.instructions = this.instructions;
-			this.instructions = null;
-			
-			return details;
-		}
-	}
-
 	public abstract class TaskFactory
 	{
 		public abstract Runnable newTask(TaskDetails details);
@@ -122,6 +75,53 @@ class Test
 			catch(Exception e) {};
 
 			log("task for " + keys + " finished");
+		}
+	}
+
+	public class TaskDetails
+	{
+		public String key;
+		public int priority;
+		public ArrayList<String> instructions;
+		
+		TaskDetails(String key)
+		{
+			this.key = key;
+		}
+
+		synchronized public void add(int priority, String instructions)
+		{
+			this.priority += priority;
+
+			if (instructions != null) {
+				if (this.instructions == null)
+					this.instructions = new ArrayList<String>();
+				this.instructions.add(instructions);
+			}
+		}
+
+		synchronized public void add(TaskDetails details)
+		{
+			this.priority += details.priority;
+
+			if (details.instructions != null) {
+				if (this.instructions == null)
+					this.instructions = new ArrayList<String>();
+				this.instructions.addAll(details.instructions);
+			}
+		}
+
+		synchronized public TaskDetails clear()
+		{
+			TaskDetails details = new TaskDetails(key);
+
+			details.priority = this.priority;
+			this.priority = 0;
+
+			details.instructions = this.instructions;
+			this.instructions = null;
+			
+			return details;
 		}
 	}
 
