@@ -209,7 +209,7 @@ class Test
 				long timeUntilNextRun = minTimeBetweenThreadRuns - (System.currentTimeMillis() - timeOfLastThreadRun.get());
 				if (timeUntilNextRun > 0)
 					try {
-						log("thread-waiting for " + timeUntilNextRun);
+						log("waiting " + timeUntilNextRun + " for thread throttle");
 						Thread.sleep(timeUntilNextRun);
 					}
 					catch(Exception e) {};
@@ -223,7 +223,7 @@ class Test
 					long timeUntilNextRun = minTimeBetweenRuns - (System.currentTimeMillis() - timeOfLastRun);
 					if (timeUntilNextRun > 0)
 						try {
-							log("waiting for " + timeUntilNextRun);
+							log("waiting " + timeUntilNextRun + " for global throttle");
 							Thread.sleep(timeUntilNextRun);
 						}
 						catch(Exception e) {};
