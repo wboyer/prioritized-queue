@@ -155,6 +155,11 @@ class Test
 			numQueues++;
 		}
 
+		synchronized public void submitTask(String key)
+		{
+			submitTask(key, 1, null);
+		}
+
 		synchronized public void submitTask(String key, int priority)
 		{
 			submitTask(key, priority, null);
@@ -366,21 +371,21 @@ class Test
 		int i;
 		
 		for (i = 0; i < 100; i++)
-			queueManager.submitTask("uri1", 1);
+			queueManager.submitTask("uri1");
 		for (i = 0; i < 10; i++)
-			queueManager.submitTask("uri" + i, 1);
+			queueManager.submitTask("uri" + i);
 		for (i = 0; i < 10; i++)
-			queueManager.submitTask("uri" + i, 1);
+			queueManager.submitTask("uri" + i);
 		for (i = 0; i < 5000; i++)
-			queueManager.submitTask("uri2", 1);
+			queueManager.submitTask("uri2");
 		for (i = 0; i < 5000; i++)
-			queueManager.submitTask("uri3", 1);
+			queueManager.submitTask("uri3");
 		for (i = 0; i < 5000; i++)
-			queueManager.submitTask("uri4", 1);
+			queueManager.submitTask("uri4");
 		for (i = 0; i < 10; i++)
-			queueManager.submitTask("uri9", 1);
+			queueManager.submitTask("uri9");
 		for (i = 0; i < 500000; i++)
-			queueManager.submitTask("uri1", 1);
+			queueManager.submitTask("uri1");
 
 		log("submissions finished");
 }
