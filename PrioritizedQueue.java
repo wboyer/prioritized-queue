@@ -50,7 +50,7 @@ class Test
 			}
 			catch(Exception e) {};
 
-			log("task for " + details.key + " with instructions " + details.instructions + " finished");
+			log("task for " + details.key + " finished");
 		}
 	}
 
@@ -135,14 +135,16 @@ class Test
 
 		private int queueIndexLogBase;
 		private int minTimeBetweenThreadRuns;
+		private int minTimeBetweenRuns;
 		private int batchSize;
 		
-		public PriorityQueueManager(TaskFactory taskFactory, int queueIndexLogBase, int minTimeBetweenThreadRuns, int batchSize)
+		public PriorityQueueManager(TaskFactory taskFactory, int queueIndexLogBase, int minTimeBetweenThreadRuns, int minTimeBetweenRuns, int batchSize)
 		{
 			this.taskFactory = taskFactory;
 
 			this.queueIndexLogBase = queueIndexLogBase;
 			this.minTimeBetweenThreadRuns = minTimeBetweenThreadRuns;
+			this.minTimeBetweenRuns = minTimeBetweenRuns;
 			this.batchSize = batchSize;
 
 			queues = new ArrayList<ThreadPoolExecutor>();
@@ -193,26 +195,41 @@ class Test
 			entry.enqueue(queues.get(queueIndex));
 		}
 
-		private ThreadLocal<Long> timeLastRun = new ThreadLocal<Long>() {
+		private ThreadLocal<Long> timeOfLastThreadRun = new ThreadLocal<Long>() {
 			@Override protected Long initialValue() {
                 return new Long(0);
 			}
         };
 
+        private Long timeOfLastRun = new Long(0);
+        
         public void waitBeforeRunningTask()
 		{
-			if (minTimeBetweenThreadRuns <= 0)
-				return;
+			if (minTimeBetweenThreadRuns > 0) {
+				long timeUntilNextRun = minTimeBetweenThreadRuns - (System.currentTimeMillis() - timeOfLastThreadRun.get());
+				if (timeUntilNextRun > 0)
+					try {
+						log("thread-waiting for " + timeUntilNextRun);
+						Thread.sleep(timeUntilNextRun);
+					}
+					catch(Exception e) {};
 
-			long timeUntilNextRun = minTimeBetweenThreadRuns - (System.currentTimeMillis() - timeLastRun.get());
-			if (timeUntilNextRun > 0)
-				try {
-					log("waiting for " + timeUntilNextRun);
-					Thread.sleep(timeUntilNextRun);
+				timeOfLastThreadRun.set(System.currentTimeMillis());
+			}
+			
+			if (minTimeBetweenRuns > 0)
+				synchronized (timeOfLastRun)
+				{
+					long timeUntilNextRun = minTimeBetweenRuns - (System.currentTimeMillis() - timeOfLastRun);
+					if (timeUntilNextRun > 0)
+						try {
+							log("waiting for " + timeUntilNextRun);
+							Thread.sleep(timeUntilNextRun);
+						}
+						catch(Exception e) {};
+
+					timeOfLastRun = System.currentTimeMillis();
 				}
-				catch(Exception e) {};
-
-			timeLastRun.set(System.currentTimeMillis());
 		}
 		
 		private class TaskStatus implements Runnable
@@ -362,7 +379,7 @@ class Test
 	{
 		ExampleTaskFactory taskFactory = new ExampleTaskFactory();
 		
-		PriorityQueueManager queueManager = new PriorityQueueManager(taskFactory, 3, 1500, 1);
+		PriorityQueueManager queueManager = new PriorityQueueManager(taskFactory, 3, 1500, 600, 1);
 		queueManager.addQueue(1);
 		queueManager.addQueue(1);
 		queueManager.addQueue(1);
