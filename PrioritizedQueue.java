@@ -2,10 +2,12 @@ import java.util.*;
 import java.util.concurrent.*;
 
 /*
- * PriorityQueueManager maintains multiple work queues, each with its own ThreadPoolExecutor.
+ * PriorityQueueManager maintains multiple work queues, each with its own ThreadPoolExecutor,
+ * which together function as one queue.
  * 
  * Queued tasks are identified by keys.  An attempt to submit a task, when a task with the same
- * key is already queued, will result only in first task's priority being incremented.
+ * key is already queued, will result only in the first task's priority being incremented and,
+ * optionally, additional "instructions" being stored for use by the task when it eventually runs.
  * 
  * As its priority increases, a task may be moved to a higher-priority queue to have a better
  * chance of running sooner.
@@ -13,30 +15,79 @@ import java.util.concurrent.*;
  */
 class Test
 {
+	public class TaskDetails
+	{
+		public int priority;
+		public ArrayList<String> instructions;
+		
+		synchronized public void add(int priority, String instructions)
+		{
+			this.priority += priority;
+
+			if (instructions != null) {
+				if (this.instructions == null)
+					this.instructions = new ArrayList<String>();
+				this.instructions.add(instructions);
+			}
+		}
+
+		synchronized public void add(TaskDetails details)
+		{
+			this.priority += details.priority;
+
+			if (details.instructions != null) {
+				if (this.instructions == null)
+					this.instructions = new ArrayList<String>();
+				this.instructions.addAll(details.instructions);
+			}
+		}
+
+		synchronized public TaskDetails clear()
+		{
+			TaskDetails details = new TaskDetails();
+
+			details.priority = this.priority;
+			this.priority = 0;
+
+			details.instructions = this.instructions;
+			this.instructions = null;
+			
+			return details;
+		}
+	}
+
 	public abstract class TaskFactory
 	{
 		TaskFactory() {}
 		
-		public abstract Runnable newTask(String key);
+		public abstract Runnable newTask(String key, TaskDetails details);
+		public abstract Runnable newBatchTask(Collection<String> keys, Collection<TaskDetails> details);
 	}
 	
 	public class ExampleTaskFactory extends TaskFactory
 	{
 		ExampleTaskFactory() {}
 		
-		public Runnable newTask(String key)
+		public Runnable newTask(String key, TaskDetails details)
 		{
-			return new ExampleTask(key);
+			return new ExampleTask(key, details);
 		}
-	}
+
+		public Runnable newBatchTask(Collection<String> keys, Collection<TaskDetails> details)
+		{
+			return new ExampleBatchTask(keys, details);
+		}
+}
 	
 	public class ExampleTask implements Runnable
 	{
 		private String key;
+		private Collection<?> instructions;
 		
-		ExampleTask(String key)
+		ExampleTask(String key, TaskDetails details)
 		{
 			this.key = key;
+			this.instructions = details.instructions;
 		}
 		
 		public void run()
@@ -46,23 +97,51 @@ class Test
 			}
 			catch(Exception e) {};
 
-			System.out.println("task for " + key + " finished on thread " + Thread.currentThread().getId() + ".");
+			log("task for " + key + " with instructions " + instructions + " finished");
 		}
 	}
-	
+
+	public class ExampleBatchTask implements Runnable
+	{
+		private Collection<String> keys;
+		private Collection<TaskDetails> details;
+		
+		ExampleBatchTask(Collection<String> keys, Collection<TaskDetails> details)
+		{
+			this.keys = keys;
+			this.details = details;
+		}
+		
+		public void run()
+		{
+			try {
+				Thread.sleep(1000);
+			}
+			catch(Exception e) {};
+
+			log("task for " + keys + " with details " + details + " finished");
+		}
+	}
+
 	public class PriorityQueueManager
 	{
-		public TaskFactory taskFactory;
-		public Hashtable<String, TaskMapEntry> taskMap;
+		private TaskFactory taskFactory;
+		private Hashtable<String, TaskStatus> taskMap;
 
 		private ArrayList<ThreadPoolExecutor> queues;
 		private int numQueues;
+
+		private int minTimeBetweenThreadRuns;
+		private int batchSize;
 		
-		PriorityQueueManager(TaskFactory taskFactory)
+		public PriorityQueueManager(TaskFactory taskFactory, int minTimeBetweenThreadRuns, int batchSize)
 		{
 			this.taskFactory = taskFactory;
+			this.minTimeBetweenThreadRuns = minTimeBetweenThreadRuns;
+			this.batchSize = batchSize;
+
 			queues = new ArrayList<ThreadPoolExecutor>();
-			taskMap = new Hashtable<String, TaskMapEntry>();
+			taskMap = new Hashtable<String, TaskStatus>();
 		}
 		
 		public void addQueue(int threadPoolSize)
@@ -71,113 +150,200 @@ class Test
 			numQueues++;
 		}
 
-		synchronized public void submitTask(String key)
+		synchronized public void submitTask(String key, int priority)
 		{
-			TaskMapEntry entry = taskMap.get(key);
+			submitTask(key, priority, null);
+		}
+
+		synchronized public void submitTask(String key, int priority, String instructions)
+		{
+			TaskStatus entry = taskMap.get(key);
 
 			if (entry == null) {
-				entry = new TaskMapEntry(key, this);
+				entry = new TaskStatus(key, this);
 				taskMap.put(key, entry);
 			}
 
-			entry.priority++;
+			entry.addDetails(priority, instructions);
 
 			enqueueTask(entry);
 		}
-		
-		private void enqueueTask(TaskMapEntry entry)
+
+		synchronized private void enqueueTask(TaskStatus entry)
 		{
-			if (entry.priority == 0) {
+			if (entry.details.priority == 0) {
 				taskMap.remove(entry.key);
 				return;
 			}
 			
-			int queueIndex = (int)Math.floor(Math.log(entry.priority) / Math.log(2));
+			int queueIndex = (int)Math.floor(Math.log(entry.details.priority) / Math.log(2));
 			if (queueIndex >= numQueues)
 				queueIndex = numQueues - 1;
 			
 			entry.enqueue(queues.get(queueIndex));
 		}
 
-		private class TaskMapEntry implements Runnable
+		private ThreadLocal<Long> timeLastRun = new ThreadLocal<Long>() {
+			@Override protected Long initialValue() {
+                return new Long(0);
+			}
+        };
+
+        public void waitBeforeRunningTask()
 		{
-			public String key;
-			public int priority;
-			public Runnable task;
-			public ThreadPoolExecutor currentQueue;
+			if (minTimeBetweenThreadRuns <= 0)
+				return;
 
-			public PriorityQueueManager queueManager;
+			long timeUntilNextRun = minTimeBetweenThreadRuns - (System.currentTimeMillis() - timeLastRun.get());
+			if (timeUntilNextRun > 0)
+				try {
+					log("waiting for " + timeUntilNextRun);
+					Thread.sleep(timeUntilNextRun);
+				}
+				catch(Exception e) {};
 
-			TaskMapEntry(String key, PriorityQueueManager queueManager)
+			timeLastRun.set(System.currentTimeMillis());
+		}
+		
+		private class TaskStatus implements Runnable
+		{
+			private String key;
+			private TaskDetails details;
+			
+			private ThreadPoolExecutor currentQueue;
+			private boolean running;
+
+			private PriorityQueueManager queueManager;
+
+			TaskStatus(String key, PriorityQueueManager queueManager)
 			{
 				this.key = key;
+				this.details = new TaskDetails();
+
 				this.queueManager = queueManager;
 			}
 			
-			public void enqueue(ThreadPoolExecutor queue)
+			public void addDetails(int priority, String instructions)
 			{
-				if (task == null) {
-					task = queueManager.taskFactory.newTask(key);
-					currentQueue = queue;
-					queue.execute(this);
-				}
-				else
-					synchronized (this)
-					{
-						if ((currentQueue != null) && (currentQueue != queue)) {
-							System.out.print("move " + key + " from " + currentQueue + " to " + queue);
-							if (currentQueue.remove(this)) {
-								currentQueue = queue;
-								queue.execute(this);
-								System.out.println(" succeeded");
-							}
-							else
-								System.out.println(" failed");
-						}
-					}
+				details.add(priority, instructions);
 			}
 
-			public boolean dequeue()
+			public void addDetails(TaskDetails details)
 			{
-				synchronized (this)
-				{
-					if (currentQueue == null) {
-						System.out.println("dequeue for " + key + " failed");
-						return false;
-					}
-					
-					currentQueue.remove(this);
-					currentQueue = null;
-				}
+				details.add(details);
+			}
+
+			public TaskDetails clearDetails()
+			{
+				return details.clear();
+			}
+			
+			synchronized public void enqueue(ThreadPoolExecutor queue)
+			{
+				if (running)
+					return;
+
+				if (currentQueue == null)
+					log("added (" + key + ", " + details.priority + ") to queue " + queue.hashCode());
+				else
+					if (currentQueue != queue)
+						if (currentQueue.remove(this))
+							log("move (" + key + ", " + details.priority + ") from queue " + currentQueue.hashCode() + " to " + queue.hashCode() + " succeeded");
+						else {
+							log("move (" + key + ", " + details.priority + ") from queue " + currentQueue.hashCode() + " to " + queue.hashCode() + " failed");
+							return;
+						}
+
+				currentQueue = queue;
+
+				queue.execute(this);
+			}
+
+			synchronized private boolean dequeue()
+			{
+				currentQueue.remove(this);
+				currentQueue = null;
+
+				running = true;
+				
 				return true;
 			}
 
-			public void requeue()
+			synchronized private void requeue()
 			{
-				synchronized (this)
-				{
-					task = null;
-					queueManager.enqueueTask(this);
-				}
+				running = false;
+				queueManager.enqueueTask(this);
 			}
 			
+			synchronized private void waitBeforeRunning()
+			{
+				queueManager.waitBeforeRunningTask();				
+			}
+
 			public void run()
 			{
-				if (!dequeue())
+				ThreadPoolExecutor queue = currentQueue;
+
+				if ((queue == null) || !dequeue())
 					return;
+
+				waitBeforeRunning();
 				
-				int initialPriority = priority;
-				
-				try {
-					task.run();
-					priority -= initialPriority;
+				TaskDetails details = clearDetails();
+
+				if (queueManager.batchSize > 1)
+				{
+					ArrayList<TaskStatus> batchedTasks = new ArrayList<TaskStatus>();
+					batchedTasks.add(this);
+
+					ArrayList<String> batchedKeys = new ArrayList<String>();
+					batchedKeys.add(key);
+
+					ArrayList<TaskDetails> batchedDetails = new ArrayList<TaskDetails>();
+					batchedDetails.add(details);
+
+					Object[] tasks = queue.getQueue().toArray();
+					for (int i = 0; (i < tasks.length) && (batchedKeys.size() < queueManager.batchSize); i++)
+					{
+						TaskStatus task = (TaskStatus)tasks[i];
+						if (!task.dequeue())
+							continue;
+						
+						batchedTasks.add(task);
+						batchedKeys.add(task.key);
+
+						details = task.clearDetails();
+						batchedDetails.add(details);
+					}
+					
+					try
+					{
+						queueManager.taskFactory.newBatchTask(batchedKeys, batchedDetails).run();
+					}
+					catch (Exception e)
+					{
+						for (int i = 0; i < batchedKeys.size(); i++)
+							((TaskStatus)batchedTasks.get(i)).addDetails(batchedDetails.get(i));
+					}
+					finally
+					{
+						for (int i = 0; i < batchedKeys.size(); i++)
+							((TaskStatus)batchedTasks.get(i)).requeue();
+					}
 				}
-				catch (Exception e) {
-					// handle the exception
-				}
-				finally {
-					requeue();
-				}
+				else
+					try
+					{
+						queueManager.taskFactory.newTask(key, details).run();
+					}
+					catch (Exception e)
+					{
+						addDetails(details);
+					}
+					finally
+					{
+						requeue();
+					}
 			}
 		}
 	}
@@ -186,7 +352,7 @@ class Test
 	{
 		ExampleTaskFactory taskFactory = new ExampleTaskFactory();
 		
-		PriorityQueueManager queueManager = new PriorityQueueManager(taskFactory);
+		PriorityQueueManager queueManager = new PriorityQueueManager(taskFactory, 1500, 1);
 		queueManager.addQueue(1);
 		queueManager.addQueue(1);
 		queueManager.addQueue(1);
@@ -194,25 +360,33 @@ class Test
 		
 		int i;
 		
-		for (i = 0; i < 5; i++)
-			queueManager.submitTask("uri1");
+		for (i = 0; i < 100; i++)
+			queueManager.submitTask("uri1", 1);
 		for (i = 0; i < 10; i++)
-			queueManager.submitTask("uri" + i);
+			queueManager.submitTask("uri" + i, 1);
 		for (i = 0; i < 10; i++)
-			queueManager.submitTask("uri" + i);
+			queueManager.submitTask("uri" + i, 1);
+		for (i = 0; i < 5000; i++)
+			queueManager.submitTask("uri2", 1);
+		for (i = 0; i < 5000; i++)
+			queueManager.submitTask("uri3", 1);
+		for (i = 0; i < 5000; i++)
+			queueManager.submitTask("uri4", 1);
 		for (i = 0; i < 10; i++)
-			queueManager.submitTask("uri2");
-		for (i = 0; i < 10; i++)
-			queueManager.submitTask("uri9");
+			queueManager.submitTask("uri9", 1);
 		for (i = 0; i < 500000; i++)
-			queueManager.submitTask("uri1");
-		
-		System.out.println("submitted");
+			queueManager.submitTask("uri1", 1);
+
+		log("submissions finished");
 }
 
 	public static void main(String[] argv)
 	{
-		Test test = new Test();
-		test.run();
+		new Test().run();
+	}
+
+	public static void log(String msg)
+	{
+		System.out.println(msg + " on thread " + Thread.currentThread().getId() + " at " + System.currentTimeMillis());
 	}
 }
