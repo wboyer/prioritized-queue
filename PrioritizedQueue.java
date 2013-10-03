@@ -17,9 +17,15 @@ class Test
 {
 	public class TaskDetails
 	{
+		public String key;
 		public int priority;
 		public ArrayList<String> instructions;
 		
+		TaskDetails(String key)
+		{
+			this.key = key;
+		}
+
 		synchronized public void add(int priority, String instructions)
 		{
 			this.priority += priority;
@@ -44,7 +50,7 @@ class Test
 
 		synchronized public TaskDetails clear()
 		{
-			TaskDetails details = new TaskDetails();
+			TaskDetails details = new TaskDetails(key);
 
 			details.priority = this.priority;
 			this.priority = 0;
@@ -58,57 +64,29 @@ class Test
 
 	public abstract class TaskFactory
 	{
-		TaskFactory() {}
-		
-		public abstract Runnable newTask(String key, TaskDetails details);
-		public abstract Runnable newBatchTask(Collection<String> keys, Collection<TaskDetails> details);
+		public abstract Runnable newTask(TaskDetails details);
+		public abstract Runnable newTask(List<TaskDetails> details);
 	}
 	
 	public class ExampleTaskFactory extends TaskFactory
-	{
-		ExampleTaskFactory() {}
-		
-		public Runnable newTask(String key, TaskDetails details)
+	{		
+		public Runnable newTask(TaskDetails details)
 		{
-			return new ExampleTask(key, details);
+			return new ExampleTask(details);
 		}
 
-		public Runnable newBatchTask(Collection<String> keys, Collection<TaskDetails> details)
+		public Runnable newTask(List<TaskDetails> details)
 		{
-			return new ExampleBatchTask(keys, details);
+			return new ExampleBatchTask(details);
 		}
 }
 	
 	public class ExampleTask implements Runnable
 	{
-		private String key;
-		private Collection<?> instructions;
+		private TaskDetails details;
 		
-		ExampleTask(String key, TaskDetails details)
+		ExampleTask(TaskDetails details)
 		{
-			this.key = key;
-			this.instructions = details.instructions;
-		}
-		
-		public void run()
-		{
-			try {
-				Thread.sleep(1000);
-			}
-			catch(Exception e) {};
-
-			log("task for " + key + " with instructions " + instructions + " finished");
-		}
-	}
-
-	public class ExampleBatchTask implements Runnable
-	{
-		private Collection<String> keys;
-		private Collection<TaskDetails> details;
-		
-		ExampleBatchTask(Collection<String> keys, Collection<TaskDetails> details)
-		{
-			this.keys = keys;
 			this.details = details;
 		}
 		
@@ -119,7 +97,31 @@ class Test
 			}
 			catch(Exception e) {};
 
-			log("task for " + keys + " with details " + details + " finished");
+			log("task for " + details.key + " with instructions " + details.instructions + " finished");
+		}
+	}
+
+	public class ExampleBatchTask implements Runnable
+	{
+		private ArrayList<String> keys;
+		
+		ExampleBatchTask(Collection<TaskDetails> details)
+		{
+			this.keys = new ArrayList<String>();
+			
+			Iterator<TaskDetails> iter = details.iterator();
+			while (iter.hasNext())
+				this.keys.add(iter.next().key);
+		}
+		
+		public void run()
+		{
+			try {
+				Thread.sleep(1000);
+			}
+			catch(Exception e) {};
+
+			log("task for " + keys + " finished");
 		}
 	}
 
@@ -131,12 +133,15 @@ class Test
 		private ArrayList<ThreadPoolExecutor> queues;
 		private int numQueues;
 
+		private int queueIndexLogBase;
 		private int minTimeBetweenThreadRuns;
 		private int batchSize;
 		
-		public PriorityQueueManager(TaskFactory taskFactory, int minTimeBetweenThreadRuns, int batchSize)
+		public PriorityQueueManager(TaskFactory taskFactory, int queueIndexLogBase, int minTimeBetweenThreadRuns, int batchSize)
 		{
 			this.taskFactory = taskFactory;
+
+			this.queueIndexLogBase = queueIndexLogBase;
 			this.minTimeBetweenThreadRuns = minTimeBetweenThreadRuns;
 			this.batchSize = batchSize;
 
@@ -172,11 +177,11 @@ class Test
 		synchronized private void enqueueTask(TaskStatus entry)
 		{
 			if (entry.details.priority == 0) {
-				taskMap.remove(entry.key);
+				taskMap.remove(entry.details.key);
 				return;
 			}
 			
-			int queueIndex = (int)Math.floor(Math.log(entry.details.priority) / Math.log(2));
+			int queueIndex = (int)Math.floor(Math.log(entry.details.priority) / Math.log(queueIndexLogBase));
 			if (queueIndex >= numQueues)
 				queueIndex = numQueues - 1;
 			
@@ -207,7 +212,6 @@ class Test
 		
 		private class TaskStatus implements Runnable
 		{
-			private String key;
 			private TaskDetails details;
 			
 			private ThreadPoolExecutor currentQueue;
@@ -217,9 +221,7 @@ class Test
 
 			TaskStatus(String key, PriorityQueueManager queueManager)
 			{
-				this.key = key;
-				this.details = new TaskDetails();
-
+				this.details = new TaskDetails(key);
 				this.queueManager = queueManager;
 			}
 			
@@ -244,13 +246,13 @@ class Test
 					return;
 
 				if (currentQueue == null)
-					log("added (" + key + ", " + details.priority + ") to queue " + queue.hashCode());
+					log("added (" + details.key + ", " + details.priority + ") to queue " + queue.hashCode());
 				else
 					if (currentQueue != queue)
 						if (currentQueue.remove(this))
-							log("move (" + key + ", " + details.priority + ") from queue " + currentQueue.hashCode() + " to " + queue.hashCode() + " succeeded");
+							log("move (" + details.key + ", " + details.priority + ") from queue " + currentQueue.hashCode() + " to " + queue.hashCode() + " succeeded");
 						else {
-							log("move (" + key + ", " + details.priority + ") from queue " + currentQueue.hashCode() + " to " + queue.hashCode() + " failed");
+							log("move (" + details.key + ", " + details.priority + ") from queue " + currentQueue.hashCode() + " to " + queue.hashCode() + " failed");
 							return;
 						}
 
@@ -261,6 +263,15 @@ class Test
 
 			synchronized private boolean dequeue()
 			{
+				if (currentQueue == null) {
+					// This should never happen, but it does.  ThreadPoolExecutor sometimes
+					// runs tasks multiple times.  It seems only to happen to tasks that we've
+					// attempted to remove().
+
+					//log("dequeue() for " + key + " failed");
+					return false;
+				}
+
 				currentQueue.remove(this);
 				currentQueue = null;
 
@@ -296,45 +307,39 @@ class Test
 					ArrayList<TaskStatus> batchedTasks = new ArrayList<TaskStatus>();
 					batchedTasks.add(this);
 
-					ArrayList<String> batchedKeys = new ArrayList<String>();
-					batchedKeys.add(key);
-
 					ArrayList<TaskDetails> batchedDetails = new ArrayList<TaskDetails>();
 					batchedDetails.add(details);
 
 					Object[] tasks = queue.getQueue().toArray();
-					for (int i = 0; (i < tasks.length) && (batchedKeys.size() < queueManager.batchSize); i++)
+					for (int i = 0; (i < tasks.length) && (batchedTasks.size() < queueManager.batchSize); i++)
 					{
 						TaskStatus task = (TaskStatus)tasks[i];
 						if (!task.dequeue())
 							continue;
 						
 						batchedTasks.add(task);
-						batchedKeys.add(task.key);
-
-						details = task.clearDetails();
-						batchedDetails.add(details);
+						batchedDetails.add(task.clearDetails());
 					}
 					
 					try
 					{
-						queueManager.taskFactory.newBatchTask(batchedKeys, batchedDetails).run();
+						queueManager.taskFactory.newTask(batchedDetails).run();
 					}
 					catch (Exception e)
 					{
-						for (int i = 0; i < batchedKeys.size(); i++)
+						for (int i = 0; i < batchedTasks.size(); i++)
 							((TaskStatus)batchedTasks.get(i)).addDetails(batchedDetails.get(i));
 					}
 					finally
 					{
-						for (int i = 0; i < batchedKeys.size(); i++)
+						for (int i = 0; i < batchedTasks.size(); i++)
 							((TaskStatus)batchedTasks.get(i)).requeue();
 					}
 				}
 				else
 					try
 					{
-						queueManager.taskFactory.newTask(key, details).run();
+						queueManager.taskFactory.newTask(details).run();
 					}
 					catch (Exception e)
 					{
@@ -352,7 +357,7 @@ class Test
 	{
 		ExampleTaskFactory taskFactory = new ExampleTaskFactory();
 		
-		PriorityQueueManager queueManager = new PriorityQueueManager(taskFactory, 1500, 1);
+		PriorityQueueManager queueManager = new PriorityQueueManager(taskFactory, 3, 1500, 1);
 		queueManager.addQueue(1);
 		queueManager.addQueue(1);
 		queueManager.addQueue(1);
