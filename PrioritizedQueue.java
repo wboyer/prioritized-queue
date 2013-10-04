@@ -169,30 +169,30 @@ class Test
 
 		synchronized public void submitTask(String key, int priority, String instructions)
 		{
-			TaskStatus entry = taskMap.get(key);
+			TaskStatus task = taskMap.get(key);
 
-			if (entry == null) {
-				entry = new TaskStatus(key, this);
-				taskMap.put(key, entry);
+			if (task == null) {
+				task = new TaskStatus(key, this);
+				taskMap.put(key, task);
 			}
 
-			entry.addDetails(priority, instructions);
+			task.addDetails(priority, instructions);
 
-			enqueueTask(entry);
+			enqueueTask(task);
 		}
 
-		synchronized private void enqueueTask(TaskStatus entry)
+		synchronized private void enqueueTask(TaskStatus task)
 		{
-			if (entry.details.priority == 0) {
-				taskMap.remove(entry.details.key);
+			if (task.details.priority == 0) {
+				taskMap.remove(task.details.key);
 				return;
 			}
 			
-			int queueIndex = (int)Math.floor(Math.log(entry.details.priority) / Math.log(queueIndexLogBase));
+			int queueIndex = (int)Math.floor(Math.log(task.details.priority) / Math.log(queueIndexLogBase));
 			if (queueIndex >= numQueues)
 				queueIndex = numQueues - 1;
 			
-			entry.enqueue(queues.get(queueIndex));
+			task.enqueue(queues.get(queueIndex));
 		}
 
 		private ThreadLocal<Long> timeOfLastThreadRun = new ThreadLocal<Long>() {
@@ -379,7 +379,7 @@ class Test
 	{
 		ExampleTaskFactory taskFactory = new ExampleTaskFactory();
 		
-		PriorityQueueManager queueManager = new PriorityQueueManager(taskFactory, 3, 1500, 600, 1);
+		PriorityQueueManager queueManager = new PriorityQueueManager(taskFactory, 3, 1500, 600, 5);
 		queueManager.addQueue(1);
 		queueManager.addQueue(1);
 		queueManager.addQueue(1);
